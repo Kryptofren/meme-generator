@@ -14,20 +14,18 @@ const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  // Enhanced font loading verification
+  // Enhanced font loading verification for cross-platform measurement accuracy
   useEffect(() => {
     let isMounted = true;
     const checkFonts = async () => {
       try {
-        // Explicitly load the specific weight used for the meme
+        // Explicitly load the Inter 800 weight used for the meme branding
         await document.fonts.load('800 16px Inter');
         await document.fonts.ready;
         if (isMounted) {
           setFontsLoaded(true);
-          // Small delay to ensure browser layout engine is synced with font metrics
-          setTimeout(() => {
-            if (isMounted) setFontsLoaded(true);
-          }, 100);
+          // Redraw after a tiny delay to ensure metrics are fully synchronized
+          setTimeout(() => { if (isMounted) drawMeme(); }, 50);
         }
       } catch (e) {
         console.warn("Font loading detection failed, using fallback", e);
@@ -35,7 +33,20 @@ const App: React.FC = () => {
       }
     };
     checkFonts();
-    return () => { isMounted = false; };
+    
+    // Listen for late-loading fonts
+    const handleFontsChange = () => {
+        if (isMounted) {
+            setFontsLoaded(true);
+            drawMeme();
+        }
+    };
+    document.fonts.addEventListener('loadingdone', handleFontsChange);
+
+    return () => { 
+        isMounted = false; 
+        document.fonts.removeEventListener('loadingdone', handleFontsChange);
+    };
   }, []);
 
   const loadAndDrawImage = (src: string) => {
@@ -76,7 +87,6 @@ const App: React.FC = () => {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    // Reset canvas to clear previous frame artifacts
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     
@@ -87,6 +97,10 @@ const App: React.FC = () => {
     const baseFontSize = Math.floor(canvas.height * 0.065); 
     const currentFontSize = baseFontSize * fontSizeScale;
 
+    /**
+     * Accurately wraps text by measuring pixel width of segments.
+     * Handles long phrases and ultra-long words gracefully.
+     */
     const wrapText = (
       context: CanvasRenderingContext2D, 
       rawText: string, 
@@ -104,24 +118,46 @@ const App: React.FC = () => {
       
       const words = text.split(/\s+/);
       const paddingX = boxWidth * 0.15;
-      const paddingY = boxHeight * 0.15;
-      
-      // SAFETY MARGIN: Use 95% of available width to prevent rounding errors across browsers
-      const targetMaxWidth = (boxWidth - (paddingX * 2)) * 0.95;
+      // Safety margin to prevent sub-pixel rounding issues on different browsers
+      const targetMaxWidth = (boxWidth - (paddingX * 2)) * 0.97;
       
       const lineHeight = fSize * 1.15; 
       const lines: string[] = [];
       let currentLine = '';
 
-      // Word wrapping loop with explicit font setting inside for absolute measurement safety
+      const pushLineWithWordSplit = (wordToSplit: string) => {
+        let charLine = '';
+        const chars = wordToSplit.split('');
+        for (const char of chars) {
+          const testCharLine = charLine + char;
+          if (context.measureText(testCharLine).width > targetMaxWidth) {
+            if (charLine) lines.push(charLine);
+            charLine = char;
+          } else {
+            charLine = testCharLine;
+          }
+        }
+        return charLine;
+      };
+
       for (const word of words) {
         context.font = fontString;
         const testLine = currentLine ? `${currentLine} ${word}` : word;
         const metrics = context.measureText(testLine);
         
-        if (metrics.width > targetMaxWidth && currentLine) {
-          lines.push(currentLine);
-          currentLine = word;
+        if (metrics.width > targetMaxWidth) {
+          if (currentLine) {
+            lines.push(currentLine);
+            // After pushing current, check if the new word itself is too wide
+            if (context.measureText(word).width > targetMaxWidth) {
+              currentLine = pushLineWithWordSplit(word);
+            } else {
+              currentLine = word;
+            }
+          } else {
+            // The word alone is too wide for an empty line
+            currentLine = pushLineWithWordSplit(word);
+          }
         } else {
           currentLine = testLine;
         }
@@ -137,7 +173,7 @@ const App: React.FC = () => {
       const startY = centerY - (totalHeight / 2) + (lineHeight / 2);
 
       context.save();
-      // Precise clipping to the white boxes of the template
+      // Clipping path matches the template's white background area exactly
       context.beginPath();
       context.rect(centerX - boxWidth / 2 + 5, centerY - boxHeight / 2 + 5, boxWidth - 10, boxHeight - 10);
       context.clip();
@@ -164,7 +200,6 @@ const App: React.FC = () => {
     }
   }, [memeText, fontSizeScale, fontsLoaded, imageLoaded]);
 
-  // Handle redraws on changes
   useEffect(() => {
     drawMeme();
   }, [drawMeme]);
@@ -194,7 +229,7 @@ const App: React.FC = () => {
           APU MEME STUDIO
         </h1>
         <p className="text-slate-500 text-[10px] md:text-[12px] font-bold uppercase tracking-[0.4em] mb-4">
-          Simple • Private • Manual Control
+          Simple • Private • Precision Wrap
         </p>
       </header>
 
