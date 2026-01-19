@@ -54,23 +54,25 @@ const App: React.FC = () => {
     canvas.height = img.naturalHeight;
     ctx.drawImage(img, 0, 0);
 
-    const baseFontSize = Math.floor(canvas.height * 0.05); 
+    const baseFontSize = Math.floor(canvas.height * 0.055); 
     
     const wrapText = (
       context: CanvasRenderingContext2D, 
-      text: string, 
+      rawText: string, 
       centerX: number, 
       centerY: number, 
       boxWidth: number, 
       boxHeight: number,
       initialFontSize: number
     ) => {
-      const words = text.trim().split(/\s+/);
-      if (words.length === 0 || text.trim() === '') return;
+      // 1. Prepare text (uppercase) to match rendering
+      const text = rawText.trim().toUpperCase();
+      const words = text.split(/\s+/);
+      if (words.length === 0 || text === '') return;
 
-      // Internal padding
-      const hPadding = boxWidth * 0.1;
-      const vPadding = boxHeight * 0.1;
+      // 2. Define internal bounds
+      const hPadding = boxWidth * 0.12;
+      const vPadding = boxHeight * 0.12;
       const maxWidth = boxWidth - (hPadding * 2);
       const maxHeight = boxHeight - (vPadding * 2);
 
@@ -79,20 +81,28 @@ const App: React.FC = () => {
       let lineHeight = 0;
       let totalBlockHeight = 0;
 
-      // Auto-shrink logic: try fitting the text, shrink font if it overflows vertically
+      // 3. Robust loop to find a font size that fits both width and height
       const findBestFit = () => {
-        while (currentFontSize > 10) {
-          context.font = `800 ${currentFontSize}px Inter, -apple-system, sans-serif`;
-          lineHeight = currentFontSize * 1.2;
+        while (currentFontSize > 6) {
+          context.font = `800 ${currentFontSize}px Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+          lineHeight = currentFontSize * 1.15;
           lines = [];
           let currentLine = '';
 
           for (let n = 0; n < words.length; n++) {
             const testLine = currentLine + words[n] + ' ';
-            const metrics = context.measureText(testLine);
+            const metrics = context.measureText(testLine.trim());
+            
             if (metrics.width > maxWidth && n > 0) {
               lines.push(currentLine.trim());
               currentLine = words[n] + ' ';
+              
+              // If a single word is too wide, we'll need to shrink the font and restart
+              const wordMetrics = context.measureText(words[n]);
+              if (wordMetrics.width > maxWidth) {
+                currentFontSize -= 1;
+                return false; 
+              }
             } else {
               currentLine = testLine;
             }
@@ -100,40 +110,43 @@ const App: React.FC = () => {
           lines.push(currentLine.trim());
           
           totalBlockHeight = lines.length * lineHeight;
-          if (totalBlockHeight <= maxHeight) break;
-          currentFontSize -= 2; // Shrink and retry
+          if (totalBlockHeight <= maxHeight) return true;
+          currentFontSize -= 1;
         }
+        return true;
       };
 
-      findBestFit();
+      // Keep retrying findBestFit if it returns false (due to forced word shrink)
+      while (!findBestFit()) {}
 
-      // Horizontal and vertical alignment
+      // 4. Horizontal and vertical alignment
       context.textAlign = 'center';
-      context.textBaseline = 'top'; // Using 'top' makes vertical block stacking more predictable
+      context.textBaseline = 'top'; 
       context.fillStyle = '#000000';
 
-      // Calculate the starting Y to center the whole block within the box
+      // Start from the top of the calculated block, centered within the box
       const startY = centerY - (totalBlockHeight / 2);
 
       context.save();
-      // Clip text to the white box area
+      // Clip to prevent any rendering outside the target box
       context.beginPath();
       context.rect(centerX - (boxWidth / 2), centerY - (boxHeight / 2), boxWidth, boxHeight);
       context.clip();
 
       lines.forEach((line, index) => {
         const lineY = startY + (index * lineHeight);
-        context.fillText(line.toUpperCase(), centerX, lineY);
+        context.fillText(line, centerX, lineY);
       });
 
       context.restore();
     };
 
-    // Panel dimensions for the standard Drake-style layout (Right half are text boxes)
+    // Apu Drake Template is divided into 2x2 grid
+    // Left side: Images (0 - 50%)
+    // Right side: Text boxes (50% - 100%)
     const panelWidth = canvas.width / 2;
     const panelHeight = canvas.height / 2;
     
-    // Coordinates for center of the right-side quadrants
     const rightCenterX = canvas.width * 0.75; 
     const topCenterY = canvas.height * 0.25;
     const bottomCenterY = canvas.height * 0.75;
