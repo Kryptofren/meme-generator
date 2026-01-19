@@ -15,12 +15,11 @@ const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  // Ensure fonts are ready before drawing to canvas for accurate measurements
+  // Ensure fonts are loaded before first draw
   useEffect(() => {
     const checkFonts = async () => {
       try {
         await document.fonts.ready;
-        // Specifically check for Inter which is used in the canvas
         await document.fonts.load('800 16px Inter');
         setFontsLoaded(true);
       } catch (e) {
@@ -40,7 +39,6 @@ const App: React.FC = () => {
     img.src = src;
     
     img.onload = async () => {
-      // Use decode() to ensure the image is fully ready for drawing
       if ('decode' in img) {
         try {
           await img.decode();
@@ -72,7 +70,6 @@ const App: React.FC = () => {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    // Reset canvas to source dimensions
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     
@@ -80,7 +77,7 @@ const App: React.FC = () => {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0);
 
-    const baseFontSize = Math.floor(canvas.height * 0.055); 
+    const baseFontSize = Math.floor(canvas.height * 0.065); 
     
     const wrapText = (
       context: CanvasRenderingContext2D, 
@@ -89,81 +86,48 @@ const App: React.FC = () => {
       centerY: number, 
       boxWidth: number, 
       boxHeight: number,
-      initialFontSize: number
+      fixedFontSize: number
     ) => {
       const text = rawText.trim().toUpperCase();
       if (!text) return;
 
       const words = text.split(/\s+/);
       
-      // Conservative padding
-      const hPadding = boxWidth * 0.15;
-      const vPadding = boxHeight * 0.15;
-      const maxWidth = boxWidth - (hPadding * 2);
-      const maxHeight = boxHeight - (vPadding * 2);
+      const paddingX = boxWidth * 0.12;
+      const paddingY = boxHeight * 0.12;
+      const targetMaxWidth = boxWidth - (paddingX * 2);
+      
+      context.font = `800 ${fixedFontSize}px Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+      const lineHeight = fixedFontSize * 1.1; 
+      const lines: string[] = [];
+      let currentLine = '';
 
-      let currentFontSize = initialFontSize;
-      let lines: string[] = [];
-      let lineHeight = 0;
-      let totalBlockHeight = 0;
-
-      // Robust fitting logic
-      const calculateLines = (fSize: number) => {
-        context.font = `800 ${fSize}px Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
-        const lHeight = fSize * 1.15;
-        const currentLines: string[] = [];
-        let currentLine = '';
-
-        for (let n = 0; n < words.length; n++) {
-          const testLine = currentLine + (currentLine ? ' ' : '') + words[n];
-          const metrics = context.measureText(testLine);
-          
-          if (metrics.width > maxWidth) {
-            // Check if even a single word is too wide
-            const wordMetrics = context.measureText(words[n]);
-            if (wordMetrics.width > maxWidth) {
-              return null; // This font size is fundamentally too big
-            }
-            
-            if (currentLine) {
-              currentLines.push(currentLine);
-              currentLine = words[n];
-            } else {
-              // Should not happen with word check above
-              currentLines.push(words[n]);
-            }
-          } else {
-            currentLine = testLine;
-          }
+      // Simple wrapping by width with fixed font size
+      for (const word of words) {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+        const metrics = context.measureText(testLine);
+        
+        if (metrics.width > targetMaxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
         }
-        if (currentLine) currentLines.push(currentLine);
-        return { lines: currentLines, totalHeight: currentLines.length * lHeight, lineHeight: lHeight };
-      };
-
-      // Shrink font size until everything fits
-      while (currentFontSize > 8) {
-        const result = calculateLines(currentFontSize);
-        if (result && result.totalHeight <= maxHeight) {
-          lines = result.lines;
-          totalBlockHeight = result.totalHeight;
-          lineHeight = result.lineHeight;
-          break;
-        }
-        currentFontSize -= 1;
       }
-
-      if (lines.length === 0) return;
+      if (currentLine) lines.push(currentLine);
+      
+      const totalHeight = lines.length * lineHeight;
 
       context.textAlign = 'center';
-      context.textBaseline = 'top'; 
+      context.textBaseline = 'middle'; 
       context.fillStyle = '#000000';
 
-      const startY = centerY - (totalBlockHeight / 2);
+      const startY = centerY - (totalHeight / 2) + (lineHeight / 2);
 
       context.save();
-      // Safe clipping
+      // Clipping - text won't overflow the white box
       context.beginPath();
-      context.rect(centerX - (boxWidth / 2), centerY - (boxHeight / 2), boxWidth, boxHeight);
+      context.rect(centerX - boxWidth / 2 + 10, centerY - boxHeight / 2 + 10, boxWidth - 20, boxHeight - 20);
       context.clip();
 
       lines.forEach((line, index) => {
@@ -180,17 +144,16 @@ const App: React.FC = () => {
     const topCenterY = canvas.height * 0.25;
     const bottomCenterY = canvas.height * 0.75;
 
-    const scaledFontSize = baseFontSize * fontSizeScale;
+    const currentFontSize = baseFontSize * fontSizeScale;
 
     if (memeText.top) {
-      wrapText(ctx, memeText.top, rightCenterX, topCenterY, panelWidth, panelHeight, scaledFontSize);
+      wrapText(ctx, memeText.top, rightCenterX, topCenterY, panelWidth, panelHeight, currentFontSize);
     }
     if (memeText.bottom) {
-      wrapText(ctx, memeText.bottom, rightCenterX, bottomCenterY, panelWidth, panelHeight, scaledFontSize);
+      wrapText(ctx, memeText.bottom, rightCenterX, bottomCenterY, panelWidth, panelHeight, currentFontSize);
     }
   }, [memeText, fontSizeScale, fontsLoaded, imageLoaded]);
 
-  // Redraw when any visual parameters change
   useEffect(() => {
     drawMeme();
   }, [drawMeme]);
@@ -204,7 +167,7 @@ const App: React.FC = () => {
       link.href = canvas.toDataURL('image/png', 1.0);
       link.click();
     } catch (e) {
-      alert("Download failed. Please right-click the image and select 'Save As'.");
+      alert("Download failed. Please right-click the image and choose 'Save image as'.");
     }
   };
 
@@ -224,7 +187,7 @@ const App: React.FC = () => {
           APU MEME STUDIO
         </h1>
         <p className="text-slate-500 text-[10px] md:text-[12px] font-bold uppercase tracking-[0.4em] mb-4">
-          Simple • Private • Smart Wrapping
+          Simple • Private • Manual Control
         </p>
       </header>
 
@@ -248,15 +211,15 @@ const App: React.FC = () => {
             <div className="space-y-8">
               <div className="flex flex-col gap-4 pb-4 border-b border-slate-800/50">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Base Font Size</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Font Size</label>
                   <span className="text-[12px] bg-emerald-500/10 px-3 py-1 rounded-full text-emerald-400 font-mono font-bold">
                     {Math.round(fontSizeScale * 100)}%
                   </span>
                 </div>
                 <input
                   type="range"
-                  min="0.3"
-                  max="1.5"
+                  min="0.2"
+                  max="2.0"
                   step="0.01"
                   value={fontSizeScale}
                   onChange={(e) => setFontSizeScale(parseFloat(e.target.value))}
@@ -300,7 +263,7 @@ const App: React.FC = () => {
                 className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-20 disabled:grayscale disabled:cursor-not-allowed text-white font-black py-5 rounded-2xl shadow-[0_10px_30px_-10px_rgba(16,185,129,0.3)] flex items-center justify-center gap-3 transition-all active:scale-95 text-lg"
               >
                 <i className="fa-solid fa-cloud-arrow-down text-xl"></i>
-                SAVE MEME
+                DOWNLOAD MEME
               </button>
 
               {imageError && (
@@ -309,7 +272,7 @@ const App: React.FC = () => {
                   className="w-full bg-slate-800/50 hover:bg-slate-800 text-slate-400 font-bold py-3 rounded-2xl border border-dashed border-slate-700 hover:border-slate-500 flex items-center justify-center gap-2 text-xs transition-all"
                 >
                   <i className="fa-solid fa-rotate-right"></i>
-                  RETRY LOADING TEMPLATE
+                  RETRY LOADING
                 </button>
               )}
             </div>
@@ -320,12 +283,12 @@ const App: React.FC = () => {
           <div className="relative bg-slate-900 border-2 border-slate-800 rounded-[2rem] overflow-hidden shadow-2xl min-h-[400px] flex items-center justify-center ring-1 ring-white/5 group">
             <div className="absolute top-4 left-4 z-10">
               <span className="bg-slate-950/80 backdrop-blur-md text-slate-400 text-[8px] font-black px-3 py-1.5 rounded-full border border-white/5 uppercase tracking-[0.2em]">
-                Canvas Preview
+                Preview
               </span>
             </div>
 
             {imageError && (
-              <div className="p-12 text-center flex flex-col items-center gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="p-12 text-center flex flex-col items-center gap-6">
                 <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center text-red-500 text-2xl">
                    <i className="fa-solid fa-triangle-exclamation"></i>
                 </div>
@@ -336,7 +299,7 @@ const App: React.FC = () => {
             {(!imageLoaded || !fontsLoaded) && !imageError && (
               <div className="flex flex-col items-center gap-6">
                 <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
-                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Loading assets...</p>
+                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Preparing Studio...</p>
               </div>
             )}
 
