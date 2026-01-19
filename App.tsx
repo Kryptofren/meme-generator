@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MemeText } from './types';
 
-// Absolute path to the template image on GitHub Pages
 const DEFAULT_TEMPLATE = 'https://kryptofren.github.io/meme-generator/meme.png';
 
 const App: React.FC = () => {
@@ -15,19 +14,23 @@ const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  // Ensure fonts are loaded before first draw
+  // Robust font loading check to ensure Canvas measurements are accurate
   useEffect(() => {
+    let isMounted = true;
     const checkFonts = async () => {
       try {
-        await document.fonts.ready;
+        // Specifically wait for the Inter 800 font to be loaded and ready
         await document.fonts.load('800 16px Inter');
-        setFontsLoaded(true);
+        await document.fonts.ready;
+        if (isMounted) setFontsLoaded(true);
       } catch (e) {
-        console.warn("Font loading failed, proceeding with system fonts", e);
-        setFontsLoaded(true);
+        console.warn("Font loading detection failed, using fallback detection", e);
+        // Fallback: check if fonts are ready after a small delay
+        setTimeout(() => { if (isMounted) setFontsLoaded(true); }, 500);
       }
     };
     checkFonts();
+    return () => { isMounted = false; };
   }, []);
 
   const loadAndDrawImage = (src: string) => {
@@ -70,6 +73,7 @@ const App: React.FC = () => {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
+    // Set canvas dimensions to match the source image exactly
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     
@@ -93,23 +97,33 @@ const App: React.FC = () => {
 
       const words = text.split(/\s+/);
       
-      const paddingX = boxWidth * 0.12;
-      const paddingY = boxHeight * 0.12;
+      // Conservative padding to ensure text stays inside the template boxes
+      const paddingX = boxWidth * 0.15;
+      const paddingY = boxHeight * 0.15;
       const targetMaxWidth = boxWidth - (paddingX * 2);
       
-      context.font = `800 ${fixedFontSize}px Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
-      const lineHeight = fixedFontSize * 1.1; 
+      // Crucial: Set font BEFORE measurement
+      const fontString = `800 ${fixedFontSize}px Inter, "Arial Black", sans-serif`;
+      context.font = fontString;
+      
+      const lineHeight = fixedFontSize * 1.15; 
       const lines: string[] = [];
       let currentLine = '';
 
-      // Simple wrapping by width with fixed font size
+      // Strict word-by-word wrapping logic
       for (const word of words) {
         const testLine = currentLine ? `${currentLine} ${word}` : word;
         const metrics = context.measureText(testLine);
         
-        if (metrics.width > targetMaxWidth && currentLine) {
-          lines.push(currentLine);
-          currentLine = word;
+        if (metrics.width > targetMaxWidth) {
+          if (currentLine) {
+            lines.push(currentLine);
+            currentLine = word;
+          } else {
+            // Case where a single word is wider than targetMaxWidth
+            lines.push(word);
+            currentLine = '';
+          }
         } else {
           currentLine = testLine;
         }
@@ -121,13 +135,15 @@ const App: React.FC = () => {
       context.textAlign = 'center';
       context.textBaseline = 'middle'; 
       context.fillStyle = '#000000';
+      // Re-apply font just in case it was modified by other canvas operations
+      context.font = fontString;
 
       const startY = centerY - (totalHeight / 2) + (lineHeight / 2);
 
       context.save();
-      // Clipping - text won't overflow the white box
+      // Strict clipping mask to prevent any rendering overflow
       context.beginPath();
-      context.rect(centerX - boxWidth / 2 + 10, centerY - boxHeight / 2 + 10, boxWidth - 20, boxHeight - 20);
+      context.rect(centerX - boxWidth / 2 + 5, centerY - boxHeight / 2 + 5, boxWidth - 10, boxHeight - 10);
       context.clip();
 
       lines.forEach((line, index) => {
@@ -138,6 +154,7 @@ const App: React.FC = () => {
       context.restore();
     };
 
+    // Calculate panels based on Apu/Drake split (2x2 grid, text on right)
     const panelWidth = canvas.width / 2;
     const panelHeight = canvas.height / 2;
     const rightCenterX = canvas.width * 0.75; 
@@ -174,10 +191,6 @@ const App: React.FC = () => {
   const handleReset = () => {
     setMemeText({ top: '', bottom: '' });
     setFontSizeScale(0.8);
-  };
-
-  const handleRetryLoad = () => {
-    loadAndDrawImage(DEFAULT_TEMPLATE);
   };
 
   return (
@@ -265,16 +278,6 @@ const App: React.FC = () => {
                 <i className="fa-solid fa-cloud-arrow-down text-xl"></i>
                 DOWNLOAD MEME
               </button>
-
-              {imageError && (
-                <button
-                  onClick={handleRetryLoad}
-                  className="w-full bg-slate-800/50 hover:bg-slate-800 text-slate-400 font-bold py-3 rounded-2xl border border-dashed border-slate-700 hover:border-slate-500 flex items-center justify-center gap-2 text-xs transition-all"
-                >
-                  <i className="fa-solid fa-rotate-right"></i>
-                  RETRY LOADING
-                </button>
-              )}
             </div>
           </section>
         </div>
