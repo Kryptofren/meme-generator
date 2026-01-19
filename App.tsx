@@ -9,25 +9,48 @@ const App: React.FC = () => {
   const [memeText, setMemeText] = useState<MemeText>({ top: '', bottom: '' });
   const [fontSizeScale, setFontSizeScale] = useState<number>(0.8);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [fontsLoaded, setFontsLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+
+  // Ensure fonts are ready before drawing to canvas for accurate measurements
+  useEffect(() => {
+    const checkFonts = async () => {
+      try {
+        await document.fonts.ready;
+        // Specifically check for Inter which is used in the canvas
+        await document.fonts.load('800 16px Inter');
+        setFontsLoaded(true);
+      } catch (e) {
+        console.warn("Font loading failed, proceeding with system fonts", e);
+        setFontsLoaded(true);
+      }
+    };
+    checkFonts();
+  }, []);
 
   const loadAndDrawImage = (src: string) => {
     setImageError(false);
     setImageLoaded(false);
     
     const img = new Image();
-    // Enable anonymous CORS to allow canvas export
     img.crossOrigin = 'anonymous'; 
     img.src = src;
     
-    img.onload = () => {
+    img.onload = async () => {
+      // Use decode() to ensure the image is fully ready for drawing
+      if ('decode' in img) {
+        try {
+          await img.decode();
+        } catch (e) {
+          console.error("Image decode failed", e);
+        }
+      }
       imageRef.current = img;
       setImageLoaded(true);
       setImageError(false);
-      drawMeme();
     };
     
     img.onerror = () => {
@@ -44,14 +67,17 @@ const App: React.FC = () => {
   const drawMeme = useCallback(() => {
     const canvas = canvasRef.current;
     const img = imageRef.current;
-    if (!canvas || !img) return;
+    if (!canvas || !img || !fontsLoaded) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    // Set canvas dimensions to match the source template
+    // Reset canvas to source dimensions
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
+    
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0);
 
     const baseFontSize = Math.floor(canvas.height * 0.055); 
@@ -65,14 +91,14 @@ const App: React.FC = () => {
       boxHeight: number,
       initialFontSize: number
     ) => {
-      // 1. Prepare text (uppercase) to match rendering
       const text = rawText.trim().toUpperCase();
-      const words = text.split(/\s+/);
-      if (words.length === 0 || text === '') return;
+      if (!text) return;
 
-      // 2. Define internal bounds
-      const hPadding = boxWidth * 0.12;
-      const vPadding = boxHeight * 0.12;
+      const words = text.split(/\s+/);
+      
+      // Conservative padding
+      const hPadding = boxWidth * 0.15;
+      const vPadding = boxHeight * 0.15;
       const maxWidth = boxWidth - (hPadding * 2);
       const maxHeight = boxHeight - (vPadding * 2);
 
@@ -81,54 +107,61 @@ const App: React.FC = () => {
       let lineHeight = 0;
       let totalBlockHeight = 0;
 
-      // 3. Robust loop to find a font size that fits both width and height
-      const findBestFit = () => {
-        while (currentFontSize > 6) {
-          context.font = `800 ${currentFontSize}px Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
-          lineHeight = currentFontSize * 1.15;
-          lines = [];
-          let currentLine = '';
+      // Robust fitting logic
+      const calculateLines = (fSize: number) => {
+        context.font = `800 ${fSize}px Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+        const lHeight = fSize * 1.15;
+        const currentLines: string[] = [];
+        let currentLine = '';
 
-          for (let n = 0; n < words.length; n++) {
-            const testLine = currentLine + words[n] + ' ';
-            const metrics = context.measureText(testLine.trim());
-            
-            if (metrics.width > maxWidth && n > 0) {
-              lines.push(currentLine.trim());
-              currentLine = words[n] + ' ';
-              
-              // If a single word is too wide, we'll need to shrink the font and restart
-              const wordMetrics = context.measureText(words[n]);
-              if (wordMetrics.width > maxWidth) {
-                currentFontSize -= 1;
-                return false; 
-              }
-            } else {
-              currentLine = testLine;
-            }
-          }
-          lines.push(currentLine.trim());
+        for (let n = 0; n < words.length; n++) {
+          const testLine = currentLine + (currentLine ? ' ' : '') + words[n];
+          const metrics = context.measureText(testLine);
           
-          totalBlockHeight = lines.length * lineHeight;
-          if (totalBlockHeight <= maxHeight) return true;
-          currentFontSize -= 1;
+          if (metrics.width > maxWidth) {
+            // Check if even a single word is too wide
+            const wordMetrics = context.measureText(words[n]);
+            if (wordMetrics.width > maxWidth) {
+              return null; // This font size is fundamentally too big
+            }
+            
+            if (currentLine) {
+              currentLines.push(currentLine);
+              currentLine = words[n];
+            } else {
+              // Should not happen with word check above
+              currentLines.push(words[n]);
+            }
+          } else {
+            currentLine = testLine;
+          }
         }
-        return true;
+        if (currentLine) currentLines.push(currentLine);
+        return { lines: currentLines, totalHeight: currentLines.length * lHeight, lineHeight: lHeight };
       };
 
-      // Keep retrying findBestFit if it returns false (due to forced word shrink)
-      while (!findBestFit()) {}
+      // Shrink font size until everything fits
+      while (currentFontSize > 8) {
+        const result = calculateLines(currentFontSize);
+        if (result && result.totalHeight <= maxHeight) {
+          lines = result.lines;
+          totalBlockHeight = result.totalHeight;
+          lineHeight = result.lineHeight;
+          break;
+        }
+        currentFontSize -= 1;
+      }
 
-      // 4. Horizontal and vertical alignment
+      if (lines.length === 0) return;
+
       context.textAlign = 'center';
       context.textBaseline = 'top'; 
       context.fillStyle = '#000000';
 
-      // Start from the top of the calculated block, centered within the box
       const startY = centerY - (totalBlockHeight / 2);
 
       context.save();
-      // Clip to prevent any rendering outside the target box
+      // Safe clipping
       context.beginPath();
       context.rect(centerX - (boxWidth / 2), centerY - (boxHeight / 2), boxWidth, boxHeight);
       context.clip();
@@ -141,12 +174,8 @@ const App: React.FC = () => {
       context.restore();
     };
 
-    // Apu Drake Template is divided into 2x2 grid
-    // Left side: Images (0 - 50%)
-    // Right side: Text boxes (50% - 100%)
     const panelWidth = canvas.width / 2;
     const panelHeight = canvas.height / 2;
-    
     const rightCenterX = canvas.width * 0.75; 
     const topCenterY = canvas.height * 0.25;
     const bottomCenterY = canvas.height * 0.75;
@@ -159,13 +188,12 @@ const App: React.FC = () => {
     if (memeText.bottom) {
       wrapText(ctx, memeText.bottom, rightCenterX, bottomCenterY, panelWidth, panelHeight, scaledFontSize);
     }
-  }, [memeText, fontSizeScale]);
+  }, [memeText, fontSizeScale, fontsLoaded, imageLoaded]);
 
+  // Redraw when any visual parameters change
   useEffect(() => {
-    if (imageLoaded) {
-      drawMeme();
-    }
-  }, [memeText, fontSizeScale, imageLoaded, drawMeme]);
+    drawMeme();
+  }, [drawMeme]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;
@@ -173,10 +201,10 @@ const App: React.FC = () => {
     try {
       const link = document.createElement('a');
       link.download = `apu-meme-${Date.now()}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.href = canvas.toDataURL('image/png', 1.0);
       link.click();
     } catch (e) {
-      alert("Download failed. Please right-click or long-press the image to save it manually.");
+      alert("Download failed. Please right-click the image and select 'Save As'.");
     }
   };
 
@@ -268,7 +296,7 @@ const App: React.FC = () => {
             <div className="mt-10 flex flex-col gap-4">
               <button
                 onClick={handleDownload}
-                disabled={!imageLoaded}
+                disabled={!imageLoaded || !fontsLoaded}
                 className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-20 disabled:grayscale disabled:cursor-not-allowed text-white font-black py-5 rounded-2xl shadow-[0_10px_30px_-10px_rgba(16,185,129,0.3)] flex items-center justify-center gap-3 transition-all active:scale-95 text-lg"
               >
                 <i className="fa-solid fa-cloud-arrow-down text-xl"></i>
@@ -305,13 +333,14 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {!imageLoaded && !imageError && (
+            {(!imageLoaded || !fontsLoaded) && !imageError && (
               <div className="flex flex-col items-center gap-6">
                 <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
+                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Loading assets...</p>
               </div>
             )}
 
-            <div className={`p-4 md:p-8 w-full ${imageLoaded ? 'block animate-in zoom-in-95 fade-in duration-700' : 'hidden'}`}>
+            <div className={`p-4 md:p-8 w-full ${(imageLoaded && fontsLoaded) ? 'block animate-in zoom-in-95 fade-in duration-700' : 'hidden'}`}>
                <canvas 
                 ref={canvasRef} 
                 className="w-full h-auto max-h-[80vh] object-contain rounded-2xl bg-white shadow-2xl ring-4 ring-white/5 transition-transform group-hover:scale-[1.005]"
