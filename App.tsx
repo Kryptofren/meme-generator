@@ -14,19 +14,24 @@ const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  // Robust font loading check to ensure Canvas measurements are accurate
+  // Enhanced font loading verification
   useEffect(() => {
     let isMounted = true;
     const checkFonts = async () => {
       try {
-        // Specifically wait for the Inter 800 font to be loaded and ready
+        // Explicitly load the specific weight used for the meme
         await document.fonts.load('800 16px Inter');
         await document.fonts.ready;
-        if (isMounted) setFontsLoaded(true);
+        if (isMounted) {
+          setFontsLoaded(true);
+          // Small delay to ensure browser layout engine is synced with font metrics
+          setTimeout(() => {
+            if (isMounted) setFontsLoaded(true);
+          }, 100);
+        }
       } catch (e) {
-        console.warn("Font loading detection failed, using fallback detection", e);
-        // Fallback: check if fonts are ready after a small delay
-        setTimeout(() => { if (isMounted) setFontsLoaded(true); }, 500);
+        console.warn("Font loading detection failed, using fallback", e);
+        if (isMounted) setFontsLoaded(true);
       }
     };
     checkFonts();
@@ -51,13 +56,11 @@ const App: React.FC = () => {
       }
       imageRef.current = img;
       setImageLoaded(true);
-      setImageError(false);
     };
     
     img.onerror = () => {
       console.error("Error loading image:", src);
       setImageError(true);
-      setImageLoaded(false);
     };
   };
 
@@ -73,7 +76,7 @@ const App: React.FC = () => {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    // Set canvas dimensions to match the source image exactly
+    // Reset canvas to clear previous frame artifacts
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     
@@ -82,7 +85,8 @@ const App: React.FC = () => {
     ctx.drawImage(img, 0, 0);
 
     const baseFontSize = Math.floor(canvas.height * 0.065); 
-    
+    const currentFontSize = baseFontSize * fontSizeScale;
+
     const wrapText = (
       context: CanvasRenderingContext2D, 
       rawText: string, 
@@ -90,40 +94,34 @@ const App: React.FC = () => {
       centerY: number, 
       boxWidth: number, 
       boxHeight: number,
-      fixedFontSize: number
+      fSize: number
     ) => {
       const text = rawText.trim().toUpperCase();
       if (!text) return;
 
-      const words = text.split(/\s+/);
-      
-      // Conservative padding to ensure text stays inside the template boxes
-      const paddingX = boxWidth * 0.15;
-      const paddingY = boxHeight * 0.15;
-      const targetMaxWidth = boxWidth - (paddingX * 2);
-      
-      // Crucial: Set font BEFORE measurement
-      const fontString = `800 ${fixedFontSize}px Inter, "Arial Black", sans-serif`;
+      const fontString = `800 ${fSize}px Inter, "Arial Black", Gadget, sans-serif`;
       context.font = fontString;
       
-      const lineHeight = fixedFontSize * 1.15; 
+      const words = text.split(/\s+/);
+      const paddingX = boxWidth * 0.15;
+      const paddingY = boxHeight * 0.15;
+      
+      // SAFETY MARGIN: Use 95% of available width to prevent rounding errors across browsers
+      const targetMaxWidth = (boxWidth - (paddingX * 2)) * 0.95;
+      
+      const lineHeight = fSize * 1.15; 
       const lines: string[] = [];
       let currentLine = '';
 
-      // Strict word-by-word wrapping logic
+      // Word wrapping loop with explicit font setting inside for absolute measurement safety
       for (const word of words) {
+        context.font = fontString;
         const testLine = currentLine ? `${currentLine} ${word}` : word;
         const metrics = context.measureText(testLine);
         
-        if (metrics.width > targetMaxWidth) {
-          if (currentLine) {
-            lines.push(currentLine);
-            currentLine = word;
-          } else {
-            // Case where a single word is wider than targetMaxWidth
-            lines.push(word);
-            currentLine = '';
-          }
+        if (metrics.width > targetMaxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
         } else {
           currentLine = testLine;
         }
@@ -131,17 +129,15 @@ const App: React.FC = () => {
       if (currentLine) lines.push(currentLine);
       
       const totalHeight = lines.length * lineHeight;
-
       context.textAlign = 'center';
       context.textBaseline = 'middle'; 
       context.fillStyle = '#000000';
-      // Re-apply font just in case it was modified by other canvas operations
       context.font = fontString;
 
       const startY = centerY - (totalHeight / 2) + (lineHeight / 2);
 
       context.save();
-      // Strict clipping mask to prevent any rendering overflow
+      // Precise clipping to the white boxes of the template
       context.beginPath();
       context.rect(centerX - boxWidth / 2 + 5, centerY - boxHeight / 2 + 5, boxWidth - 10, boxHeight - 10);
       context.clip();
@@ -154,14 +150,11 @@ const App: React.FC = () => {
       context.restore();
     };
 
-    // Calculate panels based on Apu/Drake split (2x2 grid, text on right)
     const panelWidth = canvas.width / 2;
     const panelHeight = canvas.height / 2;
     const rightCenterX = canvas.width * 0.75; 
     const topCenterY = canvas.height * 0.25;
     const bottomCenterY = canvas.height * 0.75;
-
-    const currentFontSize = baseFontSize * fontSizeScale;
 
     if (memeText.top) {
       wrapText(ctx, memeText.top, rightCenterX, topCenterY, panelWidth, panelHeight, currentFontSize);
@@ -171,6 +164,7 @@ const App: React.FC = () => {
     }
   }, [memeText, fontSizeScale, fontsLoaded, imageLoaded]);
 
+  // Handle redraws on changes
   useEffect(() => {
     drawMeme();
   }, [drawMeme]);
